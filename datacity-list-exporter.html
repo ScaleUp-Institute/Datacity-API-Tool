@@ -1,0 +1,584 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Datacity List Exporter</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,800&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<style>
+  :root {
+    --ink: #1a1814;
+    --paper: #f4efe6;
+    --paper-deep: #ebe4d6;
+    --rule: #1a1814;
+    --accent: #c2410c;
+    --accent-soft: #fed7aa;
+    --muted: #5c574e;
+    --ok: #166534;
+    --err: #991b1b;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  html, body {
+    background: var(--paper);
+    color: var(--ink);
+    font-family: 'IBM Plex Sans', sans-serif;
+    font-size: 16px;
+    line-height: 1.5;
+    min-height: 100vh;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  body {
+    background-image:
+      radial-gradient(rgba(26,24,20,0.04) 1px, transparent 1px);
+    background-size: 4px 4px;
+  }
+
+  .wrap {
+    max-width: 720px;
+    margin: 0 auto;
+    padding: 48px 24px 80px;
+  }
+
+  header.head {
+    border-bottom: 2px solid var(--rule);
+    padding-bottom: 24px;
+    margin-bottom: 40px;
+    position: relative;
+  }
+
+  .eyebrow {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--muted);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 18px;
+  }
+
+  .eyebrow .dot {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--accent);
+    margin-right: 8px;
+    vertical-align: middle;
+  }
+
+  h1 {
+    font-family: 'Fraunces', serif;
+    font-weight: 500;
+    font-size: clamp(40px, 7vw, 60px);
+    line-height: 1.0;
+    letter-spacing: -0.02em;
+    margin-bottom: 14px;
+  }
+
+  h1 em {
+    font-style: italic;
+    color: var(--accent);
+    font-weight: 400;
+  }
+
+  .lede {
+    font-family: 'Fraunces', serif;
+    font-size: 17px;
+    color: var(--muted);
+    max-width: 56ch;
+    font-weight: 400;
+  }
+
+  form {
+    display: flex;
+    flex-direction: column;
+    gap: 24px;
+  }
+
+  .field {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .field label {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--ink);
+  }
+
+  .field .hint {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11px;
+    font-weight: 400;
+    letter-spacing: 0.04em;
+    color: var(--muted);
+    text-transform: none;
+  }
+
+  .field input {
+    background: transparent;
+    border: none;
+    border-bottom: 1.5px solid var(--rule);
+    padding: 10px 0 8px;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 16px;
+    color: var(--ink);
+    width: 100%;
+    outline: none;
+    transition: border-color 0.2s, padding 0.2s;
+  }
+
+  .field input::placeholder { color: #b5ad9d; }
+
+  .field input:focus {
+    border-bottom-color: var(--accent);
+    border-bottom-width: 2px;
+    padding-bottom: 7px;
+  }
+
+  .row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 24px;
+  }
+
+  @media (max-width: 540px) {
+    .row { grid-template-columns: 1fr; }
+    .wrap { padding: 32px 20px 60px; }
+  }
+
+  .actions { margin-top: 8px; }
+
+  button.primary {
+    background: var(--ink);
+    color: var(--paper);
+    border: none;
+    padding: 16px 28px;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    cursor: pointer;
+    width: 100%;
+    transition: background 0.15s, transform 0.05s;
+    position: relative;
+  }
+
+  button.primary:hover:not(:disabled) { background: var(--accent); }
+  button.primary:active:not(:disabled) { transform: translateY(1px); }
+  button.primary:disabled { background: #7a7568; cursor: not-allowed; }
+
+  .status {
+    margin-top: 32px;
+    border-top: 1px solid var(--rule);
+    padding-top: 24px;
+    display: none;
+  }
+
+  .status.active { display: block; }
+
+  .status-line {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 13px;
+    line-height: 1.7;
+    color: var(--muted);
+    word-break: break-word;
+  }
+
+  .status-line.tag-fetch::before { content: '→ '; color: var(--accent); }
+  .status-line.tag-ok::before { content: '✓ '; color: var(--ok); }
+  .status-line.tag-err::before { content: '✗ '; color: var(--err); }
+  .status-line.tag-info::before { content: '· '; }
+
+  .progress {
+    margin-top: 16px;
+    display: flex;
+    align-items: baseline;
+    gap: 16px;
+    font-family: 'Fraunces', serif;
+  }
+
+  .progress .num {
+    font-size: 48px;
+    font-weight: 500;
+    line-height: 1;
+    letter-spacing: -0.02em;
+  }
+
+  .progress .label {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+
+  .spinner {
+    display: inline-block;
+    width: 10px; height: 10px;
+    border-radius: 50%;
+    background: var(--accent);
+    animation: pulse 1s ease-in-out infinite;
+    margin-right: 8px;
+    vertical-align: middle;
+  }
+
+  @keyframes pulse {
+    0%, 100% { opacity: 0.3; transform: scale(0.8); }
+    50% { opacity: 1; transform: scale(1.2); }
+  }
+
+  .downloads {
+    margin-top: 32px;
+    display: none;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+  }
+
+  .downloads.active { display: grid; }
+
+  @media (max-width: 540px) {
+    .downloads.active { grid-template-columns: 1fr; }
+  }
+
+  button.dl {
+    background: var(--paper);
+    color: var(--ink);
+    border: 1.5px solid var(--rule);
+    padding: 18px 20px;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    cursor: pointer;
+    text-align: left;
+    transition: background 0.15s, color 0.15s;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  button.dl:hover { background: var(--ink); color: var(--paper); }
+  button.dl .ext { color: var(--accent); font-size: 16px; }
+  button.dl:hover .ext { color: var(--accent-soft); }
+
+  footer.foot {
+    margin-top: 64px;
+    padding-top: 24px;
+    border-top: 1px solid var(--rule);
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    color: var(--muted);
+    text-transform: uppercase;
+    display: flex;
+    justify-content: space-between;
+  }
+
+  .toggle-key {
+    background: none;
+    border: none;
+    color: var(--muted);
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11px;
+    cursor: pointer;
+    text-decoration: underline;
+    padding: 0;
+  }
+
+  .label-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="head">
+    <div class="eyebrow">
+      <span><span class="dot"></span>Datacity / Exporter</span>
+      <span>v.1.0</span>
+    </div>
+    <h1>List <em>Exporter</em></h1>
+    <p class="lede">Paste a list ID, pull every company through the Datacity API, and download as CSV or XLSX. Handles pagination automatically.</p>
+  </header>
+
+  <form id="form" autocomplete="off">
+
+    <div class="field">
+      <div class="label-row">
+        <label for="apiKey">API Key</label>
+        <button type="button" class="toggle-key" id="toggleKey">show</button>
+      </div>
+      <input type="password" id="apiKey" placeholder="Your Datacity bearer token" required />
+      <span class="hint">Stays in your browser. Never sent anywhere except Datacity.</span>
+    </div>
+
+    <div class="row">
+      <div class="field">
+        <label for="listId">List ID</label>
+        <input type="text" id="listId" placeholder="e.g. 16499" inputmode="numeric" required />
+      </div>
+      <div class="field">
+        <label for="filename">Filename</label>
+        <input type="text" id="filename" placeholder="datacity_export" />
+      </div>
+    </div>
+
+    <div class="actions">
+      <button type="submit" class="primary" id="fetchBtn">Fetch list</button>
+    </div>
+  </form>
+
+  <section class="status" id="status" aria-live="polite">
+    <div id="statusLog"></div>
+    <div class="progress" id="progress" style="display:none;">
+      <div>
+        <div class="num" id="count">0</div>
+        <div class="label"><span class="spinner" id="spin"></span>companies fetched</div>
+      </div>
+    </div>
+  </section>
+
+  <section class="downloads" id="downloads">
+    <button type="button" class="dl" id="dlCsv">Download CSV <span class="ext">.csv</span></button>
+    <button type="button" class="dl" id="dlXlsx">Download Excel <span class="ext">.xlsx</span></button>
+  </section>
+
+  <footer class="foot">
+    <span>Datacity API · paginated 1000/req</span>
+    <span>2026</span>
+  </footer>
+
+</div>
+
+<script>
+(function () {
+  const API_BASE = 'https://product-api.thedatacity.com/api';
+  const BATCH = 1000;
+
+  const $ = (id) => document.getElementById(id);
+  const form = $('form');
+  const fetchBtn = $('fetchBtn');
+  const statusEl = $('status');
+  const logEl = $('statusLog');
+  const progressEl = $('progress');
+  const countEl = $('count');
+  const spinEl = $('spin');
+  const downloadsEl = $('downloads');
+  const apiKeyInput = $('apiKey');
+  const toggleKey = $('toggleKey');
+
+  let companies = [];
+  let columns = [];
+
+  toggleKey.addEventListener('click', () => {
+    if (apiKeyInput.type === 'password') {
+      apiKeyInput.type = 'text';
+      toggleKey.textContent = 'hide';
+    } else {
+      apiKeyInput.type = 'password';
+      toggleKey.textContent = 'show';
+    }
+  });
+
+  function log(msg, tag = 'info') {
+    const line = document.createElement('div');
+    line.className = `status-line tag-${tag}`;
+    line.textContent = msg;
+    logEl.appendChild(line);
+    statusEl.classList.add('active');
+  }
+
+  function resetUI() {
+    logEl.innerHTML = '';
+    statusEl.classList.remove('active');
+    downloadsEl.classList.remove('active');
+    progressEl.style.display = 'none';
+    countEl.textContent = '0';
+    companies = [];
+    columns = [];
+  }
+
+  async function fetchAll(listId, apiKey) {
+    const url = `${API_BASE}/companies/exploreList/${encodeURIComponent(listId)}`;
+    const headers = { 'Authorization': `Bearer ${apiKey}` };
+
+    let all = [];
+    let skip = 0;
+
+    while (true) {
+      const resp = await fetch(`${url}?returnCount=${BATCH}&skip=${skip}`, { headers });
+
+      if (!resp.ok) {
+        const text = await resp.text().catch(() => '');
+        throw new Error(`HTTP ${resp.status} · ${text.slice(0, 200) || resp.statusText}`);
+      }
+
+      const data = await resp.json();
+      const batch = (data && data.companies) ? data.companies : [];
+
+      if (batch.length === 0) break;
+
+      all = all.concat(batch);
+      countEl.textContent = all.length.toLocaleString();
+      log(`Fetched ${batch.length} (skip=${skip}) · running total ${all.length}`, 'fetch');
+
+      // If the API returned fewer than BATCH, we're done
+      if (batch.length < BATCH) break;
+      skip += BATCH;
+    }
+
+    return all;
+  }
+
+  function collectColumns(rows) {
+    // Preserve column order based on first-seen keys (like pandas would)
+    const seen = new Map();
+    for (const row of rows) {
+      if (row && typeof row === 'object') {
+        for (const k of Object.keys(row)) {
+          if (!seen.has(k)) seen.set(k, true);
+        }
+      }
+    }
+    return Array.from(seen.keys());
+  }
+
+  function flattenValue(v) {
+    if (v === null || v === undefined) return '';
+    if (typeof v === 'object') {
+      try { return JSON.stringify(v); } catch { return String(v); }
+    }
+    return v;
+  }
+
+  function safeFilename(name, fallback, ext) {
+    let n = (name || '').trim();
+    if (!n) n = fallback;
+    // strip extension if user typed one
+    n = n.replace(/\.(csv|xlsx)$/i, '');
+    // remove characters that break downloads on common OSes
+    n = n.replace(/[\\\/:*?"<>|]+/g, '_');
+    return `${n}.${ext}`;
+  }
+
+  function buildCSV(rows, cols) {
+    const escape = (val) => {
+      const s = String(flattenValue(val));
+      if (/[",\n\r]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+      return s;
+    };
+    const header = cols.map(escape).join(',');
+    const lines = rows.map(row => cols.map(c => escape(row ? row[c] : '')).join(','));
+    return [header, ...lines].join('\r\n');
+  }
+
+  function downloadBlob(blob, filename) {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
+  function downloadCSV() {
+    if (!companies.length) return;
+    const csv = buildCSV(companies, columns);
+    // Prepend UTF-8 BOM so Excel opens it cleanly
+    const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
+    const fname = safeFilename($('filename').value, 'datacity_export', 'csv');
+    downloadBlob(blob, fname);
+    log(`Saved ${fname}`, 'ok');
+  }
+
+  function downloadXLSX() {
+    if (!companies.length) return;
+    // Build aoa to preserve column order
+    const aoa = [columns];
+    for (const row of companies) {
+      aoa.push(columns.map(c => {
+        const v = row ? row[c] : '';
+        if (v === null || v === undefined) return '';
+        if (typeof v === 'object') {
+          try { return JSON.stringify(v); } catch { return String(v); }
+        }
+        return v;
+      }));
+    }
+    const ws = XLSX.utils.aoa_to_sheet(aoa);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Companies');
+    const fname = safeFilename($('filename').value, 'datacity_export', 'xlsx');
+    XLSX.writeFile(wb, fname);
+    log(`Saved ${fname}`, 'ok');
+  }
+
+  $('dlCsv').addEventListener('click', downloadCSV);
+  $('dlXlsx').addEventListener('click', downloadXLSX);
+
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    resetUI();
+
+    const apiKey = apiKeyInput.value.trim();
+    const listId = $('listId').value.trim();
+
+    if (!apiKey || !listId) {
+      log('API key and List ID are both required.', 'err');
+      return;
+    }
+
+    fetchBtn.disabled = true;
+    fetchBtn.textContent = 'Fetching…';
+    progressEl.style.display = 'flex';
+    spinEl.style.display = 'inline-block';
+    log(`Requesting list ${listId}`, 'info');
+
+    try {
+      const rows = await fetchAll(listId, apiKey);
+      if (!rows.length) {
+        log('No companies returned. Check the list ID and try again.', 'err');
+        return;
+      }
+      companies = rows;
+      columns = collectColumns(rows);
+      log(`Done. ${rows.length.toLocaleString()} companies · ${columns.length} columns`, 'ok');
+      downloadsEl.classList.add('active');
+    } catch (err) {
+      const msg = String(err && err.message || err);
+      if (/Failed to fetch|NetworkError|CORS/i.test(msg)) {
+        log('Network error — likely a CORS block. The Datacity API may not allow direct browser calls from this host. See the note below the form.', 'err');
+      } else {
+        log(msg, 'err');
+      }
+    } finally {
+      fetchBtn.disabled = false;
+      fetchBtn.textContent = 'Fetch list';
+      spinEl.style.display = 'none';
+    }
+  });
+})();
+</script>
+</body>
+</html>
