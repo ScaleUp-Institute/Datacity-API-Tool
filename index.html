@@ -521,17 +521,29 @@
     }
 
     try {
+      const XLSX_CELL_LIMIT = 32767; // Excel hard limit per cell
+      let truncatedCount = 0;
+
+      const cellify = (v) => {
+        if (v === null || v === undefined) return '';
+        let out;
+        if (typeof v === 'object') {
+          try { out = JSON.stringify(v); } catch { out = String(v); }
+        } else {
+          out = v;
+        }
+        if (typeof out === 'string' && out.length > XLSX_CELL_LIMIT) {
+          truncatedCount++;
+          // Reserve room for the marker
+          out = out.slice(0, XLSX_CELL_LIMIT - 20) + '…[TRUNCATED]';
+        }
+        return out;
+      };
+
       // Build aoa to preserve column order
       const aoa = [columns];
       for (const row of companies) {
-        aoa.push(columns.map(c => {
-          const v = row ? row[c] : '';
-          if (v === null || v === undefined) return '';
-          if (typeof v === 'object') {
-            try { return JSON.stringify(v); } catch { return String(v); }
-          }
-          return v;
-        }));
+        aoa.push(columns.map(c => cellify(row ? row[c] : '')));
       }
       const ws = XLSX.utils.aoa_to_sheet(aoa);
       const wb = XLSX.utils.book_new();
@@ -544,6 +556,10 @@
         type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
       });
       downloadBlob(blob, fname);
+
+      if (truncatedCount > 0) {
+        log(`${truncatedCount} cell${truncatedCount === 1 ? '' : 's'} exceeded Excel's 32,767-char limit and were truncated. Use CSV for full data.`, 'info');
+      }
       log(`Saved ${fname}`, 'ok');
     } catch (err) {
       log(`XLSX export failed: ${err && err.message ? err.message : err}`, 'err');
