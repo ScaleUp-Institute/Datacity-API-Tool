@@ -514,24 +514,41 @@
 
   function downloadXLSX() {
     if (!companies.length) return;
-    // Build aoa to preserve column order
-    const aoa = [columns];
-    for (const row of companies) {
-      aoa.push(columns.map(c => {
-        const v = row ? row[c] : '';
-        if (v === null || v === undefined) return '';
-        if (typeof v === 'object') {
-          try { return JSON.stringify(v); } catch { return String(v); }
-        }
-        return v;
-      }));
+
+    if (typeof XLSX === 'undefined') {
+      log('Excel library failed to load (check your connection or try CSV instead).', 'err');
+      return;
     }
-    const ws = XLSX.utils.aoa_to_sheet(aoa);
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, 'Companies');
-    const fname = safeFilename($('filename').value, 'datacity_export', 'xlsx');
-    XLSX.writeFile(wb, fname);
-    log(`Saved ${fname}`, 'ok');
+
+    try {
+      // Build aoa to preserve column order
+      const aoa = [columns];
+      for (const row of companies) {
+        aoa.push(columns.map(c => {
+          const v = row ? row[c] : '';
+          if (v === null || v === undefined) return '';
+          if (typeof v === 'object') {
+            try { return JSON.stringify(v); } catch { return String(v); }
+          }
+          return v;
+        }));
+      }
+      const ws = XLSX.utils.aoa_to_sheet(aoa);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, 'Companies');
+      const fname = safeFilename($('filename').value, 'datacity_export', 'xlsx');
+
+      // Use Blob-based download for cross-browser/mobile reliability
+      const wbout = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+      const blob = new Blob([wbout], {
+        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+      });
+      downloadBlob(blob, fname);
+      log(`Saved ${fname}`, 'ok');
+    } catch (err) {
+      log(`XLSX export failed: ${err && err.message ? err.message : err}`, 'err');
+      console.error(err);
+    }
   }
 
   $('dlCsv').addEventListener('click', downloadCSV);
@@ -581,5 +598,4 @@
 })();
 </script>
 </body>
-  
 </html>
