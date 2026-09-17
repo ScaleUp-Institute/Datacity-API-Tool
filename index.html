@@ -480,15 +480,46 @@
     return `${n}.${ext}`;
   }
 
-  function buildCSV(rows, cols) {
+  function buildCSVBlob(rows, cols) {
     const escape = (val) => {
       const s = String(flattenValue(val));
       if (/[",\n\r]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
       return s;
     };
-    const header = cols.map(escape).join(',');
-    const lines = rows.map(row => cols.map(c => escape(row ? row[c] : '')).join(','));
-    return [header, ...lines].join('\r\n');
+    // A single joined CSV string can exceed the JS engine's max string length
+    // (~536M chars) and throw "Invalid string length". Instead we build the file
+    // in chunks and hand the pieces to the Blob, which concatenates them as bytes
+    // without ever creating one combined string. parts[0] is a UTF-8 BOM so Excel
+    // opens the file cleanly.
+    const SEP = '\r\n';
+    const CHUNK_CHAR_BUDGET = 100_000_000; // keep each part well under the ceiling
+    const parts = ['\uFEFF'];
+    let buf = [];
+    let bufChars = 0;
+    let firstChunk = true;
+
+    const flush = () => {
+      if (!buf.length) return;
+      if (!firstChunk) parts.push(SEP);
+      parts.push(buf.join(SEP));
+      firstChunk = false;
+      buf = [];
+      bufChars = 0;
+    };
+    const pushLine = (line) => {
+      buf.push(line);
+      bufChars += line.length + SEP.length;
+      if (bufChars >= CHUNK_CHAR_BUDGET) flush();
+    };
+
+    pushLine(cols.map(escape).join(',')); // header
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i];
+      pushLine(cols.map(c => escape(row ? row[c] : '')).join(','));
+    }
+    flush();
+
+    return new Blob(parts, { type: 'text/csv;charset=utf-8;' });
   }
 
   function downloadBlob(blob, filename) {
@@ -504,12 +535,20 @@
 
   function downloadCSV() {
     if (!companies.length) return;
-    const csv = buildCSV(companies, columns);
-    // Prepend UTF-8 BOM so Excel opens it cleanly
-    const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
-    const fname = safeFilename($('filename').value, 'datacity_export', 'csv');
-    downloadBlob(blob, fname);
-    log(`Saved ${fname}`, 'ok');
+    try {
+      const blob = buildCSVBlob(companies, columns);
+      const fname = safeFilename($('filename').value, 'datacity_export', 'csv');
+      downloadBlob(blob, fname);
+      log(`Saved ${fname}`, 'ok');
+    } catch (err) {
+      const m = err && err.message ? err.message : String(err);
+      if (/Invalid string length|out of memory|allocation failed|Array buffer/i.test(m)) {
+        log('This list is too large to build in the browser, even as CSV. Try splitting it into smaller Datacity lists and exporting each.', 'err');
+      } else {
+        log(`CSV export failed: ${m}`, 'err');
+      }
+      console.error(err);
+    }
   }
 
   function downloadXLSX() {
@@ -520,49 +559,88 @@
       return;
     }
 
-    try {
-      const XLSX_CELL_LIMIT = 32767; // Excel hard limit per cell
-      let truncatedCount = 0;
+    const XLSX_CELL_LIMIT = 32767;         // Excel hard limit per cell
+    // SheetJS serialises each worksheet into a SINGLE XML string. That string
+    // cannot exceed the JS engine's max length (~536M chars) — exceeding it is
+    // exactly the "Invalid string length" RangeError. XLSX XML is also far
+    // bulkier than CSV (~40 chars of markup per cell), so a list that exports
+    // fine as CSV can still blow past the limit as XLSX. We therefore split the
+    // rows across multiple sheets, keeping each sheet's estimated XML size well
+    // under the ceiling.
+    const SHEET_CHAR_BUDGET = 50_000_000;  // est. rendered chars per sheet (safe margin)
+    const SHEET_ROW_LIMIT   = 250_000;     // secondary guard (Excel max is 1,048,576)
+    const CELL_XML_OVERHEAD = 40;          // approx per-cell XML markup
 
-      const cellify = (v) => {
-        if (v === null || v === undefined) return '';
-        let out;
-        if (typeof v === 'object') {
-          try { out = JSON.stringify(v); } catch { out = String(v); }
-        } else {
-          out = v;
-        }
-        if (typeof out === 'string' && out.length > XLSX_CELL_LIMIT) {
-          truncatedCount++;
-          // Reserve room for the marker
-          out = out.slice(0, XLSX_CELL_LIMIT - 20) + '…[TRUNCATED]';
-        }
-        return out;
-      };
+    let truncatedCount = 0;
 
-      // Build aoa to preserve column order
-      const aoa = [columns];
-      for (const row of companies) {
-        aoa.push(columns.map(c => cellify(row ? row[c] : '')));
+    const cellify = (v) => {
+      if (v === null || v === undefined) return '';
+      let out;
+      if (typeof v === 'object') {
+        try { out = JSON.stringify(v); } catch { out = String(v); }
+      } else {
+        out = v;
       }
-      const ws = XLSX.utils.aoa_to_sheet(aoa);
-      const wb = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(wb, ws, 'Companies');
-      const fname = safeFilename($('filename').value, 'datacity_export', 'xlsx');
+      if (typeof out === 'string' && out.length > XLSX_CELL_LIMIT) {
+        truncatedCount++;
+        // Reserve room for the marker
+        out = out.slice(0, XLSX_CELL_LIMIT - 20) + '…[TRUNCATED]';
+      }
+      return out;
+    };
+    const cellCost = (s) => (typeof s === 'string' ? s.length : String(s).length) + CELL_XML_OVERHEAD;
 
-      // Use Blob-based download for cross-browser/mobile reliability
+    try {
+      const header = columns.map(cellify);
+      const headerCost = header.reduce((a, c) => a + cellCost(c), 0);
+
+      const wb = XLSX.utils.book_new();
+      let i = 0, sheetIdx = 0;
+
+      // Pack rows into sheets until the estimated XML size (or row count) for the
+      // current sheet would exceed budget, then start a new sheet.
+      while (i < companies.length) {
+        let aoa = [header];
+        let budget = headerCost;
+        let count = 0;
+        while (i < companies.length) {
+          const row = companies[i];
+          const cells = columns.map(c => cellify(row ? row[c] : ''));
+          const cost = cells.reduce((a, c) => a + cellCost(c), 0);
+          // Always take at least one row per sheet, even a single oversized one.
+          if (count > 0 && (budget + cost > SHEET_CHAR_BUDGET || count >= SHEET_ROW_LIMIT)) break;
+          aoa.push(cells);
+          budget += cost;
+          count++;
+          i++;
+        }
+        sheetIdx++;
+        const name = sheetIdx === 1 ? 'Companies' : `Companies ${sheetIdx}`;
+        XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(aoa), name);
+        aoa = null; // release; the sheet keeps its own copy
+      }
+
+      const fname = safeFilename($('filename').value, 'datacity_export', 'xlsx');
       const wbout = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
       const blob = new Blob([wbout], {
         type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
       });
       downloadBlob(blob, fname);
 
+      if (sheetIdx > 1) {
+        log(`Large list split across ${sheetIdx} sheets (Companies, Companies 2, …) to stay within Excel's per-sheet limits. The CSV keeps everything in one table.`, 'info');
+      }
       if (truncatedCount > 0) {
         log(`${truncatedCount} cell${truncatedCount === 1 ? '' : 's'} exceeded Excel's 32,767-char limit and were truncated. Use CSV for full data.`, 'info');
       }
       log(`Saved ${fname}`, 'ok');
     } catch (err) {
-      log(`XLSX export failed: ${err && err.message ? err.message : err}`, 'err');
+      const m = err && err.message ? err.message : String(err);
+      if (/Invalid string length|out of memory|allocation failed|Array buffer/i.test(m)) {
+        log('This list is too large to assemble as an Excel file in the browser. Use “Download CSV” — it holds the full dataset and opens directly in Excel.', 'err');
+      } else {
+        log(`XLSX export failed: ${m}`, 'err');
+      }
       console.error(err);
     }
   }
