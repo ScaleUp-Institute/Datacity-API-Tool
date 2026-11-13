@@ -497,40 +497,36 @@
       if (/[",\n\r]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
       return s;
     };
-    // A single joined CSV string can exceed the JS engine's max string length
-    // (~536M chars) and throw "Invalid string length". Instead we build the file
-    // in chunks and hand the pieces to the Blob, which concatenates them as bytes
-    // without ever creating one combined string. parts[0] is a UTF-8 BOM so Excel
-    // opens the file cleanly.
+    // Building the whole CSV as one JS string needs ~2 bytes/char held in the
+    // heap ON TOP of the already-large source data, which OOM-crashes the tab on
+    // big lists (tens of thousands of rows — "Aw, Snap" + reload). Instead we turn
+    // each batch of rows into its OWN Blob as we go: a Blob can be backed by disk
+    // and the source string for that batch becomes collectable immediately, so
+    // peak heap stays at roughly one batch regardless of total size. The final
+    // Blob merely references the batch Blobs — it does not re-copy them into JS
+    // memory.
     const SEP = '\r\n';
-    const CHUNK_CHAR_BUDGET = 100_000_000; // keep each part well under the ceiling
-    const parts = ['\uFEFF'];
-    let buf = [];
-    let bufChars = 0;
-    let firstChunk = true;
+    const ROWS_PER_BLOB = 2000;
+    const blobType = { type: 'text/csv' };
+    const blobParts = [new Blob(['\uFEFF'], blobType)]; // UTF-8 BOM so Excel opens cleanly
+    let batch = [];
 
     const flush = () => {
-      if (!buf.length) return;
-      if (!firstChunk) parts.push(SEP);
-      parts.push(buf.join(SEP));
-      firstChunk = false;
-      buf = [];
-      bufChars = 0;
-    };
-    const pushLine = (line) => {
-      buf.push(line);
-      bufChars += line.length + SEP.length;
-      if (bufChars >= CHUNK_CHAR_BUDGET) flush();
+      if (!batch.length) return;
+      // Leading SEP stitches this batch onto the header / previous batch.
+      blobParts.push(new Blob([SEP + batch.join(SEP)], blobType));
+      batch = [];
     };
 
-    pushLine(cols.map(escape).join(',')); // header
+    blobParts.push(new Blob([cols.map(escape).join(',')], blobType)); // header, no leading SEP
     for (let i = 0; i < rows.length; i++) {
       const row = rows[i];
-      pushLine(cols.map(c => escape(row ? row[c] : '')).join(','));
+      batch.push(cols.map(c => escape(row ? row[c] : '')).join(','));
+      if (batch.length >= ROWS_PER_BLOB) flush();
     }
     flush();
 
-    return new Blob(parts, { type: 'text/csv;charset=utf-8;' });
+    return new Blob(blobParts, { type: 'text/csv;charset=utf-8;' });
   }
 
   function downloadBlob(blob, filename) {
